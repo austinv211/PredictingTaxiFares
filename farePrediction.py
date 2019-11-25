@@ -5,7 +5,7 @@
 # - Manhattan distance should be useful, but I think we can do better with real distance
 # - Here we compare a manual calculation to the geopy library
 
-# In[5]:
+# In[1]:
 
 
 from math import sin, cos, sqrt, atan2, radians
@@ -40,13 +40,14 @@ def haversine(lat1, lon1, lat2, lon2, km_const=6371.0):
 #     - test.csv: our testing data
 #     - sample_submissions.csv: A sample submission file in the correct format (columns key and fare_amount). This dummy file 'predicts' fare_amount to be $11.35 for all rows, which is the mean fare_amount from the training set.
 
-# In[6]:
+# In[2]:
 
 
 import pandas as pd
 import os
 import sys
 import numpy as np
+import random
 
 TOTAL_ROWS = 55423855
 
@@ -89,9 +90,15 @@ def get_df_list(file_path, chunksize=1000000):
         df_chunk['pickup_datetime'] = pd.to_datetime(df_chunk['pickup_datetime'], utc=True, format='%Y-%m-%d %H:%M')
         df_chunk['real_dist'] = haversine(df_chunk['pickup_latitude'], df_chunk['pickup_longitude'], df_chunk['dropoff_latitude'], df_chunk['dropoff_longitude'])
         df_chunk['hour'] = df_chunk['pickup_datetime'].dt.hour
-        add_col = pd.get_dummies(df_chunk['hour'], prefix='hour')
-        df_chunk = pd.concat([df_chunk, add_col], axis=1)
-        df_chunk.drop(['hour', 'key', 'pickup_datetime'], axis=1, inplace=True)
+        df_chunk['day'] = df_chunk['pickup_datetime'].dt.day
+        df_chunk['month'] = df_chunk['pickup_datetime'].dt.month
+        df_chunk['year'] = df_chunk['pickup_datetime'].dt.year
+        add_col_hour = pd.get_dummies(df_chunk['hour'], prefix='hour')
+        add_col_day = pd.get_dummies(df_chunk['day'], prefix='day')
+        add_col_month = pd.get_dummies(df_chunk['month'], prefix='month')
+        add_col_year = pd.get_dummies(df_chunk['year'], prefix='year')
+        df_chunk = pd.concat([df_chunk, add_col_hour, add_col_day, add_col_month, add_col_year], axis=1)
+        df_chunk.drop(['hour', 'day', 'month', 'year', 'key', 'pickup_datetime', 'pickup_longitude', 'pickup_latitude'], axis=1, inplace=True)
         df_chunk.dropna(axis=1, how='any', inplace=True)
         df_list.append(df_chunk)
     return df_list
@@ -105,14 +112,21 @@ def feather_dataset(dataframe, file_out):
 
 # import the dataset as a list of chunks, from here we can do our processing at a chunk level
 print('Importing Datasets...')
-TRAINING_LIST = get_df_list(f'{DATA_FILES_PATH}train.csv')
-TEST = pd.concat(get_df_list(f'{DATA_FILES_PATH}test.csv'))
+DATA_LIST = get_df_list(f'{DATA_FILES_PATH}train.csv')
+
+train_split = int(len(DATA_LIST) * 0.8)
+
+random.shuffle(DATA_LIST)
+
+TRAINING_LIST = DATA_LIST[:train_split]
+
+TEST = pd.concat(DATA_LIST[train_split:])
 
 TRAINING_LIST[0].head()
     
 
 
-# In[7]:
+# In[3]:
 
 
 TEST.head()
@@ -122,19 +136,91 @@ TEST.head()
 # - SGD stands for stochastic gradient descent
 # - Here we are feeding our chunks into the partial fit
 
-# In[8]:
+# In[4]:
 
 
 from sklearn.linear_model import SGDRegressor
+from sklearn.preprocessing import StandardScaler
 
-def fit_training_chunks(chunk_list):
-    my_sgd_regressor = SGDRegressor()
+def sgd_train(chunk_list, loss="squared_loss"):
+    my_sgd_regressor = SGDRegressor(loss=loss)
+    my_sgd_regressor.n_iter = np.ceil(10**6 / len(TEST[LABEL]))
+    scaler = StandardScaler()
     for chunk in chunk_list:
-        print(chunk.columns.difference(['pickup_datetime', LABEL]))
-        my_sgd_regressor.partial_fit(chunk[chunk.columns.difference(['pickup_datetime', LABEL])], chunk[LABEL])
-    y_predict = my_sgd_regressor.predict(TEST[TEST.columns.difference(['pickup_datetime', LABEL])])
+        X_train = chunk[chunk.columns.difference([LABEL])]
+        scaler.fit(X_train)
+        my_sgd_regressor.partial_fit(scaler.transform(X_train), chunk[LABEL])
+    X_test = TEST[TEST.columns.difference([LABEL])]
+    y_predict = my_sgd_regressor.predict(scaler.transform(X_test))
     return y_predict
 
+print('Getting SGD predictions...')
+Y_PREDICT_SGD = sgd_train(TRAINING_LIST)
 
-fit_training_chunks(TRAINING_LIST)
+
+# In[ ]:
+
+
+from sklearn.ensemble import RandomForestRegressor
+from functools import reduce
+
+def gen_rf(X_train, y_train):
+    rf = RandomForestRegressor(n_estimators = 2, verbose=3)
+    rf.fit(X_train, y_train)
+    return rf
+
+def combine_rf(a, b):
+    a.estimators_ += b.estimators_
+    a.n_estimators = len(a.estimators_)
+    return a
+
+def rf_train(chunk_list):
+    rf_list = [gen_rf(chunk[chunk.columns.difference([LABEL])], chunk[LABEL]) for chunk in chunk_list]
+    rf_total = reduce(combine_rf, rf_list)
+    y_predict = rf_total.predict(TEST[TEST.columns.difference([LABEL])])
+    return y_predict
+
+def rf_train_warm_start(chunk_list):
+    """
+    currently getting like the same rmse as linear with 1 estimator per million.
+
+    is batching the issue?
+
+    would be get a better value using random samples of the training set, maybe with bootstrapping?
+    """
+    rf = RandomForestRegressor(n_estimators = 1, verbose=3, warm_start=True)
+    for chunk in chunk_list:
+        X_train = chunk[chunk.columns.difference([LABEL])]
+        rf.fit(X_train, chunk[LABEL])
+        rf.n_estimators += 1
+    X_test = TEST[TEST.columns.difference([LABEL])]
+    y_predict = rf.predict(X_test)
+    return y_predict
+    
+
+print('Getting RF Predictions...')
+Y_PREDICT_RF = rf_train_warm_start(TRAINING_LIST)
+
+
+# In[ ]:
+
+
+from sklearn import metrics
+import numpy as np
+
+def calc_rmse(y_test, y_prediction):
+    # Calculating "Mean Square Error" (MSE):
+    mse = metrics.mean_squared_error(y_test, y_prediction)
+
+    # Using numpy sqrt function to take the square root and calculate "Root Mean Square Error" (RMSE)
+    return np.sqrt(mse)
+
+print(f'SGB RMSE: {calc_rmse(TEST[LABEL], Y_PREDICT_SGD)}')
+print(f'RF RMSE: {calc_rmse(TEST[LABEL], Y_PREDICT_RF)}')
+
+
+# In[ ]:
+
+
+
 
