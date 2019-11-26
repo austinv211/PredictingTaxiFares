@@ -2,3 +2,4 @@
 /projectDataFiles/**
 .vscode
 .ipynb_checkpoints/
+.Shapefile/**
