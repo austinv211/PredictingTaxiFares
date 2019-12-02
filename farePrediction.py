@@ -14,10 +14,13 @@ import pandas as pd
 DATA_FILES_PATH = 'projectDataFiles/'
 LABEL = 'fare_amount'
 
+# dataframe to analyze the dataset
 INTRO_DF = pd.read_csv(f'{DATA_FILES_PATH}train.csv', nrows=2000000)
 
 # describe the dataset
 INTRO_DF.describe()
+
+# TODO: Show comparison of using non optimal dataset to cleaned up dataset
 
 
 # ### Finding possible outliers we can remove
@@ -25,6 +28,9 @@ INTRO_DF.describe()
 # - there is also some crazy latitude and longitudes in the set
 # 
 # ### Now let's plot our data to learn more
+
+# # Jose
+# using Google maps API might be over used due to size of data and will be charged
 
 # In[2]:
 
@@ -55,7 +61,7 @@ print(f'Number of Negative fare amounts: {len(INTRO_DF[INTRO_DF[LABEL] < 0])}')
 print(f'Number of very high fare amounts: {len(INTRO_DF[INTRO_DF[LABEL] >= 100])}')
 
 # remove the negative and zero fare amounts
-INTRO_DF[INTRO_DF[LABEL] > 0].describe()
+INTRO_DF[(INTRO_DF[LABEL] > 0) & (INTRO_DF[LABEL] <= 100)].describe()
 
 
 # In[5]:
@@ -69,19 +75,41 @@ plt.show()
 # In[6]:
 
 
-import geopandas as gpd
+# import geopandas as gpd
 
+import matplotlib.pyplot as plt
 # NYC Boundaries
 NYC_BOUNDARY = (-74.5, -72.8, 40.5, 41.8) # in format WEST, EAST, NORTH, SOUTH
+ruh_m = plt.imread('images/map.png')
 
-# plot out the latitudes and longitudes on this map
+fig, ax = plt.subplots(figsize = (8,7))
+ax.scatter(INTRO_DF.pickup_longitude, INTRO_DF.pickup_latitude, zorder=1, alpha= 0.2, c='b', s=10)
+ax.set_title('Plotting Pick up lat and lon')
+ax.set_xlim(NYC_BOUNDARY[0],NYC_BOUNDARY[1])
+ax.set_ylim(NYC_BOUNDARY[2],NYC_BOUNDARY[3])
+ax.imshow(ruh_m, zorder=0, extent = NYC_BOUNDARY, aspect= 'equal')
+plt.show()
+
+
+# In[7]:
+
+
+ruh_m = plt.imread('images/map.png')
+
+fig, ay = plt.subplots(figsize = (8,7))
+ay.scatter(INTRO_DF.dropoff_longitude, INTRO_DF.dropoff_latitude, zorder=1, alpha= 0.2, c='r', s=10)
+ay.set_title('Plotting drop off Pick up lat and lon')
+ay.set_xlim(NYC_BOUNDARY[0],NYC_BOUNDARY[1])
+ay.set_ylim(NYC_BOUNDARY[2],NYC_BOUNDARY[3])
+ay.imshow(ruh_m, zorder=0, extent = NYC_BOUNDARY, aspect= 'equal')
+plt.show()
 
 
 # ## Define a function to get the real distance between to lat/long points
 # - Manhattan distance should be useful, but I think we can do better with real distance
 # - Here we compare a manual calculation to the geopy library
 
-# In[7]:
+# In[8]:
 
 
 from math import sin, cos, sqrt, atan2, radians
@@ -91,6 +119,8 @@ import numpy as np
 
 def geo_manhattan_distance(lat1, lat2, long1, long2):
     """
+    pickup_longitude   pickup_latitude   dropoff_longitude   dropoff_latitude
+    x1                 y1                x2                  y2
     returns the manhattan distance between two geo points
     """
     return abs(lat2 - lat1) + abs(long2 - long1)
@@ -117,7 +147,7 @@ def haversine(lat1, lon1, lat2, lon2, m_const=3958.8):
 # - not_at_airport is a function to filter out those getting picked up or dropped off at an airport
 # - reasonable_fare is a way to limit outlier fares (see plots below on why values were chosen)
 
-# In[8]:
+# In[9]:
 
 
 # filter functions to reduce the dataset
@@ -129,7 +159,7 @@ def not_at_airport(dataframe):
 
 
 def has_passengers(dataframe):
-    return (dataframe['passenger_count'] != 0)
+    return (dataframe['passenger_count'] != 0) & (dataframe['passenger_count'] <= 6)
     
 def reasonable_fare(dataframe):
     return (dataframe['fare_amount'].between(left=0, right=100))
@@ -138,7 +168,7 @@ def reasonable_fare(dataframe):
 # ## Define a process dataframe function
 # - this function will perform our feature engineering and feature removals
 
-# In[9]:
+# In[10]:
 
 
 def process_df(dataframe, train_data=True):
@@ -181,7 +211,7 @@ def process_df(dataframe, train_data=True):
     dataframe['dlon'] = abs(dataframe['pickup_longitude'] - dataframe['dropoff_longitude'])
     dataframe['m_dist'] = geo_manhattan_distance(dataframe['pickup_latitude'], dataframe['pickup_longitude'], dataframe['dropoff_latitude'], dataframe['dropoff_longitude'])
     
-    # limit to the boundary
+    # applying filters
     dataframe = dataframe[within_boundary(dataframe, NYC_BOUNDARY) & has_passengers(dataframe) & reasonable_fare(dataframe)].copy()
 
     # drop uneccessary columns
@@ -204,7 +234,7 @@ def process_df(dataframe, train_data=True):
 #     - test.csv: our testing data
 #     - sample_submissions.csv: A sample submission file in the correct format (columns key and fare_amount). This dummy file 'predicts' fare_amount to be $11.35 for all rows, which is the mean fare_amount from the training set.
 
-# In[10]:
+# In[11]:
 
 
 import pandas as pd
@@ -256,7 +286,6 @@ def get_df_list(file_path, chunksize=1000000):
     return df_list
         
 
-
 def read_feathered_data(file_path):
     return pd.read_feather(file_path)
 
@@ -277,13 +306,16 @@ print('Importing Datasets...')
 
 # TRAINING_LIST[0].head()
 
-# import the dataset for testing 
+# import the dataset for testing, do not use on top of full training data import
 DF = import_training_dataset_limit(f'{DATA_FILES_PATH}train.csv')
 
 # print(list(DF.columns))
 
 DF.head()
 
+# splitting the dataset as train and test datasets
+# TRAIN[FEATURES] == X_train TEST[FEATURES] == X_test
+# TRAIN[LABEL] = y_train TEST[LABEL] == y_test
 TRAIN, TEST = train_test_split(DF, test_size=0.2, random_state=5)
 TRAIN.head()
 
@@ -316,24 +348,36 @@ FEATURES = [
     'dropoff_to_laguardia'
 ]
 
+# showing airport fares that should be flat far for NYC
 
-# In[11]:
-
-
-TEST.head()
-
-
-# In[ ]:
+# temp = TRAIN[(TRAIN['pickup_to_jfk'] < 1) | (TRAIN['dropoff_to_jfk'] < 1)]
+# temp[['fare_amount','passenger_count','real_dist']].describe()
 
 
+# In[12]:
 
+
+TEST[FEATURES].head()
+
+
+# In[13]:
+
+
+from sklearn.linear_model import LinearRegression
+
+def lr_train(training_data):
+    lr_regressor = LinearRegression(fit_intercept=True, normalize=False, copy_X=True, n_jobs=-1)
+    lr_regressor.fit(training_data[FEATURES],training_data[LABEL])
+    return lr_regressor.predict(TEST[FEATURES])
+
+Y_PREDICT_LR = lr_train(TRAIN)
 
 
 # ## Perform a SGD partial fit
 # - SGD stands for stochastic gradient descent
 # - Here we are feeding our chunks into the partial fit
 
-# In[12]:
+# In[14]:
 
 
 from sklearn.linear_model import SGDRegressor
@@ -356,7 +400,11 @@ print('Getting SGD predictions...')
 Y_PREDICT_SGD = sgd_train([TRAIN])
 
 
-# In[13]:
+# ## Use a Random Forrest  Model with HyperParameter Optimization using Randomized Search
+# - Random forrest should perform fairly well on the dataset
+# - takes a long time to train the full dataset
+
+# In[15]:
 
 
 from sklearn.ensemble import RandomForestRegressor
@@ -366,21 +414,14 @@ from functools import reduce
 feature_importances = []
 
 def get_best_rf_params(training_data):
-    # Number of trees in random forest
     n_estimators = [int(x) for x in np.linspace(start = 5, stop = 200, num = 5)]
-    # Number of features to consider at every split
     max_features = ['auto', 'sqrt']
-    # Maximum number of levels in tree
     max_depth = [int(x) for x in np.linspace(10, 110, num = 11)]
     max_depth.append(None)
-    # Minimum number of samples required to split a node
     min_samples_split = [2, 5, 10]
-    # Minimum number of samples required at each leaf node
     min_samples_leaf = [1, 2, 4]
-    # Method of selecting samples for training each tree
     bootstrap = [True, False]
     
-    # Create the random grid
     random_grid = {'n_estimators': n_estimators,
                    'max_features': max_features,
                    'max_depth': max_depth,
@@ -401,8 +442,9 @@ def rf_train_warm_start(chunk_list, n_estimators = 1):
         n_estimators = n_estimators,
         bootstrap = True,
         random_state=5,
-        verbose=2,
-        n_jobs=-1
+        verbose=1,
+        n_jobs=-1,
+        warm_start=True
     )
     
     scaler = StandardScaler()
@@ -430,9 +472,12 @@ print('Getting RF Predictions...')
 Y_PREDICT_RF = rf_train_warm_start([TRAIN], n_estimators=20)
 
 # TODO: Add preview of predictions
+print(Y_PREDICT_RF[::100])
 
 
-# In[14]:
+# ## Plot out our feature importances
+
+# In[16]:
 
 
 def plot_feature_importances_bar(feature_importances):
@@ -447,30 +492,30 @@ def plot_feature_importances_bar(feature_importances):
 plot_feature_importances_bar(feature_importances)
 
 
-# In[15]:
+# ## Plot the cumulative importance of our features
+
+# In[17]:
 
 
 def plot_feature_importances_cumulative(feature_importances):
     get_ipython().run_line_magic('matplotlib', 'inline')
     x_values = list(range(len(feature_importances)))
-    # List of features sorted from most to least important
     sorted_importances = [importance[1] for importance in feature_importances]
     sorted_features = [importance[0] for importance in feature_importances]
-    # Cumulative importances
     cumulative_importances = np.cumsum(sorted_importances)
-    # Make a line graph
     plt.plot(x_values, cumulative_importances, 'g-')
-    # Draw line at 95% of importance retained
     plt.hlines(y = 0.95, xmin=0, xmax=len(sorted_importances), color = 'r', linestyles = 'dashed')
-    # Format x ticks and labels
     plt.xticks(x_values, sorted_features, rotation = 'vertical')
-    # Axis labels and title
     plt.xlabel('Variable'); plt.ylabel('Cumulative Importance'); plt.title('Cumulative Importances');
 
 plot_feature_importances_cumulative(feature_importances)
 
 
-# In[16]:
+# ## Try out the LightGBM model
+# - LightGBM trains pretty efficiently and works well on large datasets.
+# - See the docs here: https://lightgbm.readthedocs.io/en/latest/
+
+# In[18]:
 
 
 import lightgbm as lgb
@@ -483,13 +528,15 @@ def lgb_train(training_data):
 # Y_PREDICT_LGB = lgb_train(pd.concat(TRAINING_LIST))
 Y_PREDICT_LGB = lgb_train(TRAIN)
 
-# preview predictions
 
+# ## Get the RMSE values for our predictions
+# - LightGBM and Random Forrest performed fairly similary
 
-# In[17]:
+# In[19]:
 
 
 from sklearn import metrics
+from statistics import variance 
 import numpy as np
 
 def calc_rmse(y_test, y_prediction):
@@ -499,15 +546,20 @@ def calc_rmse(y_test, y_prediction):
     # Using numpy sqrt function to take the square root and calculate "Root Mean Square Error" (RMSE)
     return np.sqrt(mse)
 
-print(f'SGB RMSE: {calc_rmse(TEST[LABEL], Y_PREDICT_SGD)}')
-print(f'RF RMSE: {calc_rmse(TEST[LABEL], Y_PREDICT_RF)}')
-print(f'LGB RMSE: {calc_rmse(TEST[LABEL], Y_PREDICT_LGB)}')
 
-# TODO: Add variance calculations and predict TEST csv values
+predict_list = [Y_PREDICT_LR,
+                Y_PREDICT_SGD,
+                Y_PREDICT_RF,
+                Y_PREDICT_LGB]
+RMSE_list = {
+'LR':calc_rmse(TEST[LABEL],predict_list[0]),
+'SGB':calc_rmse(TEST[LABEL], predict_list[1]),
+'RF':calc_rmse(TEST[LABEL], predict_list[2]),
+'LGB':calc_rmse(TEST[LABEL], predict_list[3])}
 
-
-# In[ ]:
-
-
-
+count = 0
+for key in RMSE_list:
+    print(f'{key} RMSE: {RMSE_list[key]}')
+    print(f'\tvariance: {variance(predict_list[count])}')
+    count += 1
 
